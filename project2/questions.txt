@@ -1,0 +1,78 @@
+1. Describe how your design prevent Faculty Members and Students from
+being inside the room at the same time. Also, describe how you are protecting
+read and write of shared variables.
+
+My current system design architecture prevents Faculty Members and Students from being inside the room simultaneously
+using the `status` variable together with `pthread_mutex_t` and condition
+variables. The `status` variable can be `EMPTY`, `FACULTYINSIDE`, or `STUDENTINSIDE`. Entry functions such as
+`faculty_wants_to_enter()` and `student_wants_to_enter()` first acquire the `mutex`, then
+block on `pthread_cond_wait()` while the room's `status` indicates the other role is
+inside. When admitted into the resource room, a thread updates the queue counters and the `*_inside` counters
+and sets `status` accordingly. Because the admission and counter updates occur while
+holding the same mutex, the invariant that faculty and students are never inside at the
+same time is preserved.
+
+All shared variables (`status`, `faculty_inside`, `students_inside`, `faculty_queued`,
+`students_queued`) are protected by the same mutex. Every read or write to these fields
+is performed inside a critical section protected by `pthread_mutex_lock(&mutex)` and
+`pthread_mutex_unlock(&mutex)`. This serializes access and prevents data race conditons where one
+thread at a time makes modifications to the shared resource and other threads see either the old or 
+new consistent state but never an interleaved, inconsistent state.
+
+2. Are you using busy waiting in your program? Please point out in your code
+on how the program is using busy waiting or avoiding it.
+
+My current program currently does not use busy waiting. Instead, it uses condition variables for efficient synchronization.
+Busy waiting would involve a thread looping repeatedly to check if a condition is true, consuming CPU cycles even when the 
+thread is not making progress. My design avoids this enitrely by using pthread_cond_wait(). For instance, in faculty_wants_to_enter(),
+when a faculty thread determines that students are using the room, it executes pthread_cond_wait(&faculty_cond, &mutex). This function
+atomically releases the mutex and puts the thread to sleep, removing it from the CPU scheduler's run queue. The thread does not 
+consume CPU cycles while waiting; instead, the kernel deschedules it until it is explicitly woken by another thread calling 
+pthread_cond_broadcast().
+
+This program demonstrates the correct use of condition variables when faculty members exit the room. In faculty_leaves(), after
+decrementing faculty_inside and determining that no faculty are left inside, the code checks if students are queued. If so, it calls
+pthread_cond_broadcast(&student_cond), which wakes all threads waiting on that condition variable. These student threads then reacquire
+the mutex, re-test the while loop condition while(status == FACULTYINSIDE), and proceed if the condition is now false (ex. the room
+is empty). If this program used busy waiting instead, it would look like a loop with usleep(1000) inside, repeatedly waking up to check
+the status variable, which would waste CPU time and reduce efficiency. By using condition variables, the program achieves quite the opposite:
+threads sleep until signaled, and only active threads consume system resources.
+
+
+3. How did you prevent deadlock, which makes program run forever? Also,
+how did you reduce the chance of starvation so that program runs quickly?
+
+Deadlocks are prevented in my design through several key properties. First, 
+there is only a single mutex protecting all shared states. A deadlock requires
+a circular wait where multiple threads holds a resource and waits for resources 
+being held by other threads in order to access each other's resources. 
+With only one mutex, a circular dependency cannot form because there is no circular 
+ordering of resource acquisition. Secondly, the design ensures that blocked threads always 
+release the mutex. When a faculty thread cannot enter because students are inside, it calls pthread_cond_wait(&faculty_cond, &mutex),
+which atomically releases the mutex before sleeping. This means that the mutex is never
+held by a blocked thread, allowing other threads to proceed and eventually change the 
+state that would unblock the first thread. If threads held the mutex while blocked,
+other threads could not acquire it to change state, leading to a deadlock. Third,
+the program uses pthread_cond_broadcast() instead of pthread_cond_signal().
+Broadcasting wakes all waiting threads of the appropriate role, not just one. This
+is critical because if only one faculty thread were woken when the room becomes empty,
+and that thread still could not enter for some reason, the remaining waiting faculty would
+never be woken and would be permanently blocked.
+
+Starvation occurs when a lower-priority thread is ready to execute, but is indefinitely postponed and is reduced
+through the broadcast mechanism and the atomic re-checking conditions. When the last student 
+exits, student_leaves() broadcasts to all waiting faculty threads simultaneously. Rather than 
+a single faculty thread being selected and potentially failing to enter (leaving others blocked),
+all faculty are awakened and compete fairly to acquire the mutex and proceed. Each thread that 
+wakes re-checks its while condition under the lock, ensuring it only proceeds if the condition
+is truly satisfied. This prevents a situation where a thread is permanently stuck in a sleep
+state even though the condition it is waiting for has been satisfied. However, my design does
+have some potential fairness weakness: if faculty and students alternate arrivals, and a new 
+group always arrives while the current group is inside, the previous role may be starved waiting
+indefinitely. For instance, if Faculty #1 is inside and Student #1 is queued, but Faculty #2
+arrives frequently enough, Faculty #1 leaving might signal Student #1, but then Faculty #2 and #3
+could continually arrive and enter, causing Student #1 to remain blocked. To mitigate true starvation
+in practice, the random arrival pattern and bounded stay times in my implementation mean that 
+threads do not arrive faster than they can be served, so indefinite starvation is unlikely. More
+efficient designs could implement a "turn" variable or prioritize the role with the longer
+queue, but my current design relies on arrival patterns not causing persistent unfairness.

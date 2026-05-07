@@ -1,0 +1,15 @@
+# Common build artifacts
+*.o
+*.obj
+*.exe
+
+# Project 1 build outputs
+project1/project1/p1/p1_exec
+project1/project1/p1/output/
+
+# Project 2 build outputs
+project2/p2_exec
+
+# Archives and editor backups
+*.zip
+*~
