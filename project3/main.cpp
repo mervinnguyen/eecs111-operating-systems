@@ -200,6 +200,17 @@ void fifo_schedule()
 	// - Print one scheduler decision line when you select a thread:
 	//   [<Time> ms][Scheduler] FIFO selected Thread <id> (deadline <deadline> ms, period <period> ms)
 	// Your code goes here
+	pthread_mutex_lock(&mutex);
+
+	if (running_thread == -1 && !ready_queue.empty()) {
+		int id = ready_queue[0];
+		ready_queue.erase(ready_queue.begin());
+		printf("[%6lu ms][Scheduler] FIFO selected Thread %d 
+			  (deadline %lu ms, period %lu ms)\n", get_time_stamp(), 
+			  id, tcb[id].deadline, tcb[id].period);
+		pthread_cond_signal(&resume[id]);
+	}
+	pthread_mutex_unlock(&mutex);
 }
 
 void edf_schedule(void)
