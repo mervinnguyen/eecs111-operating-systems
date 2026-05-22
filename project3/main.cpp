@@ -279,4 +279,43 @@ void rm_schedule(void)
 	// - Use the same scheduler decision and preemption output style as EDF, replacing
 	//   "EDF" with "RM".
  	// Your code goes here
+	pthread_mutex_lock(&mutex);
+	if(ready_queue.empty()) {
+		pthread_mutex_unlock(&mutex);
+		return;
+	}
+	/*Find the ready thread with the shortest period (highest RM priority)*/
+	int best_idx = 0;
+	for(int i = 1; i < (int)ready_queue.size(); i++) {
+		if (tcb[ready_queue[i]].period < tcb[ready_queue[best_idx]].period) {
+			best_idx = i;
+		}
+	}
+	int best_id = ready_queue[best_idx];
+
+	if(running_thread == -1) {
+		/*No thread running - schedule the highest-priority ready thread*/
+		ready_queue.erase(ready_queue.begin() + best_idx);
+		printf("[%6lu ms][Scheduler] RM selected Thread %d (deadline %lu ms. period %lu ms)\n", get_time_stamp(), best_id, tcb[best_id].deadline, tcb[best_id].period);
+
+		pthread_cond_signal(&resume[best_id]);
+	} else if (tcb[best_id].period < tcb[running_thread].period) {
+		/*A ready thread has a shorter period, therefore preempt the current runnning thread*/
+		printf("[%6lu ms][Scheduler] RM preempts Thread %d for Thread %d\n", get_time_stamp(), running_thread, best_id);
+		preempt = 1;
+		pthread_cond_wait(&preempt_task, &mutex);
+		/*Worker has requeued itself; running_thread is now -1*/
+		/*Re-find the best candidate (preempted thread is back in the queue)*/
+		best_idx = 0;
+		for(int i = 1; i < (int)ready_queue.size(); i++) {
+			if (tcb[ready_queue[i]].period < tcb[ready_queue[best_idx]].period) {
+				best_idx = i;
+			}
+		}
+		best_id = ready_queue[best_idx];
+		ready_queue.erase(ready_queue.begin() + best_idx);
+		printf("[%6lu ms][Scheduler] RM selected Thread %d (deadline %lu ms, period %lu ms)\n", get_time_stamp(), best_id, tcb[best_id].deadline, tcb[best_id].period);
+		pthread_cond_signal(&resume[best_id]);
+	}
+	pthread_mutex_unlock(&mutex);
 }
