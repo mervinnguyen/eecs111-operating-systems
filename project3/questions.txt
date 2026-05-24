@@ -1,0 +1,103 @@
+1. Compare FIFO, EDF, and RM scheduling for this project. Which information does each
+scheduler use to choose the next thread, and how can the same ready queue produce
+different choices under the three policies?
+
+    FIFO is a scheduling algorithm which scheduled based upon the arrival time of threads.
+FIFO selects the first thread that was added to the ready_queue, named ready_queue[0]. 
+The period and the hard and soft deadlines of the threads run for are entirely ignored by
+FIFO. Also FIFO never preempts other threads. Once a thread has claimed CPU time for a period,
+it will continue to run until it has finished. 
+
+    EDF uses each thread's absolute deadline (tcb[id].deadline). First, all ready threads are put 
+into a list in order of ascending deadline values. Then the thread with the list's first element 
+(ready_queue[0]) is selected. Additonally, while a thread is running its absolute deadline 
+(tcb[id].deadline) is always compared with the absolute deadline of newly ready threads 
+(as given by ready_queue.size()). If the newly ready thread's absolute deadline is smaller, 
+this new thread immediately takes over the CPU in a preemptive manner. 
+
+    RM assigns a priority to each thread based off of the period assigned to the thread at creation time 
+(tcb[id].period). Since each period is of a different length, shorter periods mean higher priority. 
+Also note that a threads priority does never change during the run time of the thread.
+
+    To see how the same ready_queue can be processed in very different ways, consider the point in time
+around t=800ms, after thread 0 has completed its time quantum and both threads 1 and 3
+are ready to run. Thread 3 arrived at start_offset 700ms and thread 1 arrived at start_offset 800ms.
+
+FIFO picks Thread 3, since it arrives first.
+EDF picks Thread 1, deadline 1800ms < Thread 3's deadline 3700ms.
+RM picks Thread 1, period 1000ms < Thread 3's period 4000ms.
+
+    Therefore, we have the same ready queue in each of the three alternatives, but three completely different 
+decisions based on three completely different attributes.
+
+2. Identify the shared variables used by the scheduler and worker threads. Explain why the
+mutex is needed, and explain how pthread_cond_wait and pthread_cond_signal are used to
+block and resume worker threads.
+
+The shared variables accessed by both the scheduler (main thread) and worker threads are:
+
+"ready_queue" : becomes _ready_and_wait() the id of the current thread is pushed onto the ready_queue
+of the parent of this thread by the worker. In "wait_after_preemption()", the worker also pushed itself back
+ontop the ready_queue after being preempted. The scheduler in the main thread continues to read and erases entries
+from the ready_queue when selecting the next thread to run.
+
+"running_thread" : Workers set it to their own id after waking and seeing that the slot is currently free, they
+then set it to -1 when they have completed or even preempted, the scheduler than can act on this information in 
+this variable reading it from the shared memory.
+
+"preempt" : the scheduler sets this to 1 to request preemption of the current running thread.
+A worker checks should_preempt() every 100ms chunk of time in run_task() to see if it should 
+preempt the current running task. The preempted task is then cleared using wait_after_preemption().
+
+"tcb[i].deadline" : The time of completion of the last iteration of the task, updating the current worker
+in the task control block after each completed iteration, read by EDF to compare the deadlines.
+
+"global_work" : set to 0 by main at shutdown; read by our workers in their wait loops to device whether to exit.
+
+A mutex lock must be taken for access to these shared variables because they will be accessed by multiple threads 
+concurrently. This could cause problems for the scheduler. For instance, the ready_queue could be read by the scheduler
+while it is being written by a worker. The "running_thread" variable would have similiar problems. Its value could be read
+by the scheduler while it is being changed by a worker. This type of problem is often referred to as a torn read without proper
+synchronization. A mutex also ensures that only one thread at a time can write to shared variables and that thread has the variables
+locked while it it is writing. Other threads will be blocked from entering the mutex lock until the mutex is unlocked.
+Once the mutex is unlocked by one thread, other threads can then attempt to lock the mutex for access to the shared variables.
+
+"pthread_cond_signal(&resume[id])" is used by the scheduler to wake up a worker allowing it to continue its execution. When a worker 
+wakes up, it reacquires the mutex it had released before. Then, it proceeds to check the value of "running_thread". If "running_thread"
+is -1 then the worker sets the value of "running_thread" to id of the worker and continues with its execution. Otherwise the worker goes back
+to sleep in a loop of pthread_cond_wait continuing to wake up and check the value of "running_thread" in a loop until the value of "running_thread"
+is -1 (indicating the end of the execution of the thread currently running). This is the correct way to use a condition variable (a predicate and a 
+function to wait until the predicate is satisfied).
+
+For preemption of a task running by a worker, the scheduler of the main thread first sets the shared variable preempt to 1, then calls
+"pthread_cond_wait(&preempt_task, &mutex). In its run_task() method, a worker checks should_preempt() (which just reads the preemp variable)
+every 100ms time block of its run time and, if the variable is non-zero. it clears preempt, then waits to be signalled by the scheduler 
+(which happens after it has cleared running_thread and requeued itself onto the ready_queue). This is the mechanism by which the scheduler acknowledges
+a preemption request from the scheduler.
+
+3. Describe how your EDF and RM implementations decide when to preempt the running
+thread. What changes in the program state when preemption happens, and how do the
+required output lines help show that preemption and completion happened correctly?
+
+EDF preempts when the following 3 conditions are all true: ready_queue is not empty, running_thread == -1(slot is free), and the minimum-deadline task in ready_queue has
+an earlier deadline than the currently running task (tcb[best_id].deadline < tcb[running_thread].deadline). 
+
+In RM scheduling, same applies but when we compare the periods of the threads instead: tcb[best_id].period < tcb[running_thread].period. As before, note that 
+we are using struct inqeuality, therefore a thread with an equal priority to the running thread will not cause preemption of the running task (i.e. no benefit
+to switch to that task). When a thread preempts another the following happens:
+
+Set preempt = 1 and call pthread_cond_wait(&preempt_task, &mutex). This task will block and release the mutex.
+The running worker detects preempt == 1 between its 100ms work chunks in run_task().
+Worker's task's code runs: wait_after_preemption(): preempt = 0; running_thread = -1; insert tcb of preempted task 
+into the ready_queue; signal preempt_task of preempted task.
+When the scheduler wakes up, the mutex is re-acquired and the ready queue is re-scanned. The scheduler proceeds to select the next task to run,
+signals the resume task for the newly selected task from the ready queue (ex. remove tcb[best_id] from ready_queue).
+The newly scheduled task wakes up from the "pthread_cond_wait" call, it sees that "running_thread" is not set to -1, therefore
+it sets "running_thread" to the id of the newly scheduled task and it continues its execution.
+
+The output for the entire sequence of steps is also provided for verifiability. The line EDF preempts Thread X for Thread Y is printed 
+by the scheduler before setting the preempt flag. Then, in the worker code, the line Thread preempted by is printed by the worker to confirm
+that the worker received the preempt flag and acted upon it. The line restarting task (iteration N) with M ms remaining in the worker code confirms
+that the preempted task is rescheduled later and the total amount of time that the task was executed is also verified to add up to the correct amount. 
+Completed task or missed deadline in the scheduler code is the ultimate output and provides the verification for the correct scheduling interleaving
+for the tasks. 

@@ -205,9 +205,7 @@ void fifo_schedule()
 	if (running_thread == -1 && !ready_queue.empty()) {
 		int id = ready_queue[0];
 		ready_queue.erase(ready_queue.begin());
-		printf("[%6lu ms][Scheduler] FIFO selected Thread %d 
-			  (deadline %lu ms, period %lu ms)\n", get_time_stamp(), 
-			  id, tcb[id].deadline, tcb[id].period);
+		printf("[%6lu ms][Scheduler] FIFO selected Thread %d (deadline %lu ms, period %lu ms)\n", get_time_stamp(), id, tcb[id].deadline, tcb[id].period);
 		pthread_cond_signal(&resume[id]);
 	}
 	pthread_mutex_unlock(&mutex);
@@ -231,12 +229,12 @@ void edf_schedule(void)
 	// Your code goes here
 	pthread_mutex_lock(&mutex);
 	if(ready_queue.empty()) {
-		pthread_mutext_unlock(&mutex);
+		pthread_mutex_unlock(&mutex);
 		return;
 	}
 	/*Find the ready thread with the earliest absolute deadline*/
 	int best_idx = 0;
-	for(int i = 1; i < (int)read_queue.size(); i++) {
+	for(int i = 1; i < (int)ready_queue.size(); i++) {
 		if(tcb[ready_queue[i]].deadline < tcb[ready_queue[best_idx]].deadline) {
 			best_idx = i;
 		}
@@ -296,7 +294,7 @@ void rm_schedule(void)
 	if(running_thread == -1) {
 		/*No thread running - schedule the highest-priority ready thread*/
 		ready_queue.erase(ready_queue.begin() + best_idx);
-		printf("[%6lu ms][Scheduler] RM selected Thread %d (deadline %lu ms. period %lu ms)\n", get_time_stamp(), best_id, tcb[best_id].deadline, tcb[best_id].period);
+		printf("[%6lu ms][Scheduler] RM selected Thread %d (deadline %lu ms, period %lu ms)\n", get_time_stamp(), best_id, tcb[best_id].deadline, tcb[best_id].period);
 
 		pthread_cond_signal(&resume[best_id]);
 	} else if (tcb[best_id].period < tcb[running_thread].period) {
